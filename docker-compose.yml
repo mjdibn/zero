@@ -1,0 +1,80 @@
+version: '3.8'
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:latest
+    container_name: zt-keycloak
+    command: start-dev
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HOSTNAME_STRICT: false
+      KC_HTTP_ENABLED: true
+    ports:
+      - "8080:8080"
+    networks:
+      - zt-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  opa:
+    image: openpolicyagent/opa:latest
+    container_name: zt-opa
+    command: 
+      - "run"
+      - "--server"
+      - "--addr=0.0.0.0:8181"
+      - "--log-level=debug"
+      - "/policies"
+    ports:
+      - "8181:8181"
+    volumes:
+      - ./policies:/policies:ro
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    networks:
+      - zt-net
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://localhost:8181/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  device-posture:
+    build: ./device-posture
+    container_name: zt-device-posture
+    ports:
+      - "8082:8082"
+    environment:
+      - OPA_URL=http://opa:8181
+      - KEYCLOAK_URL=http://keycloak:8080
+    depends_on:
+      opa:
+        condition: service_healthy
+    networks:
+      - zt-net
+
+  backend:
+    build: ./backend
+    container_name: zt-backend
+    ports:
+      - "5000:5000"
+    environment:
+      - OPA_URL=http://opa:8181
+      - DEVICE_POSTURE_URL=http://device-posture:8082
+      - KEYCLOAK_URL=http://keycloak:8080
+    depends_on:
+      opa:
+        condition: service_healthy
+      device-posture:
+        condition: service_started
+    networks:
+      - zt-net
+
+networks:
+  zt-net:
+    driver: bridge
